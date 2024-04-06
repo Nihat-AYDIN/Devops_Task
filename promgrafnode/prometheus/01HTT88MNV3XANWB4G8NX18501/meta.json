@@ -1,0 +1,17 @@
+{
+	"ulid": "01HTT88MNV3XANWB4G8NX18501",
+	"minTime": 1712412000000,
+	"maxTime": 1712419200000,
+	"stats": {
+		"numSamples": 1885741,
+		"numSeries": 20682,
+		"numChunks": 26487
+	},
+	"compaction": {
+		"level": 1,
+		"sources": [
+			"01HTT88MNV3XANWB4G8NX18501"
+		]
+	},
+	"version": 1
+}

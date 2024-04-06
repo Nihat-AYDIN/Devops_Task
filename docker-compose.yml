@@ -1,0 +1,262 @@
+version: '3.8'
+
+networks:
+  esnet:
+  monitoring:
+    driver: bridge
+
+volumes:
+  es1_data:
+  es2_data:
+  es3_data:
+  prometheus_data: {}
+
+services:
+ elasticsearch1:
+  image: elasticsearch:7.17.18
+  container_name: elasticsearch1
+  hostname: elasticsearch1
+  volumes:
+    - type: volume
+      source: es1_data
+      target: /usr/share/elasticsearch/data
+  ports:
+    - "9200:9200"
+  environment:
+    - node.name=elasticsearch1
+    - bootstrap.memory_lock=true
+    - cluster.name=mycluster
+    - discovery.seed_hosts=elasticsearch2,elasticsearch3
+    - cluster.initial_master_nodes=elasticsearch1,elasticsearch2,elasticsearch3
+    - ES_JAVA_OPTS=-Xms512m -Xmx512m -Des.index.number_of_replicas=0 -Des.enforce.bootstrap.checks=true
+    - xpack.security.enabled=false
+    - xpack.security.http.ssl.enabled=false
+    - xpack.security.transport.ssl.enabled=false
+    - xpack.ml.enabled=false
+    - xpack.graph.enabled=false
+    - xpack.watcher.enabled=false
+    - node.master=true
+    - node.data=true
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:9200"]
+    interval: 30s
+    timeout: 10s
+    retries: 30
+  ulimits:
+    memlock:
+      soft: -1
+      hard: -1
+  deploy:
+    resources:
+      limits:
+        memory: 1500m
+  networks:
+    - esnet
+
+ elasticsearch2:
+  image: elasticsearch:7.17.18
+  container_name: elasticsearch2
+  hostname: elasticsearch3
+  restart: unless-stopped
+  volumes:
+    - type: volume
+      source: es2_data
+      target: /usr/share/elasticsearch/data
+  ports:
+    - "9201:9200"
+  environment:
+    - node.name=elasticsearch2
+    - bootstrap.memory_lock=true
+    - cluster.name=mycluster
+    - discovery.seed_hosts=elasticsearch1,elasticsearch3
+    - cluster.initial_master_nodes=elasticsearch1,elasticsearch2,elasticsearch3
+    - ES_JAVA_OPTS=-Xms512m -Xmx512m -Des.index.number_of_replicas=0 -Des.enforce.bootstrap.checks=true
+    - xpack.security.enabled=false
+    - xpack.security.http.ssl.enabled=false
+    - xpack.security.transport.ssl.enabled=false
+    - xpack.ml.enabled=false
+    - xpack.graph.enabled=false
+    - xpack.watcher.enabled=false
+    - node.master=true
+    - node.data=true
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:9200"]
+    interval: 30s
+    timeout: 10s
+    retries: 30
+  ulimits:
+    memlock:
+      soft: -1
+      hard: -1
+  networks:
+    - esnet
+
+ elasticsearch3:
+  image: elasticsearch:7.17.18
+  container_name: elasticsearch3
+  hostname: elasticsearch3
+  restart: unless-stopped
+  volumes:
+    - type: volume
+      source: es3_data
+      target: /usr/share/elasticsearch/data
+  ports:
+    - "9202:9200"
+  environment:
+    - node.name=elasticsearch3
+    - bootstrap.memory_lock=true
+    - cluster.name=mycluster
+    - discovery.seed_hosts=elasticsearch1,elasticsearch2
+    - cluster.initial_master_nodes=elasticsearch1,elasticsearch2,elasticsearch3
+    - ES_JAVA_OPTS=-Xms512m -Xmx512m -Des.index.number_of_replicas=0 -Des.enforce.bootstrap.checks=true
+    - xpack.security.enabled=false
+    - xpack.security.http.ssl.enabled=false
+    - xpack.security.transport.ssl.enabled=false
+    - xpack.ml.enabled=false
+    - xpack.graph.enabled=false
+    - xpack.watcher.enabled=false
+    - node.master=true
+    - node.data=true
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:9200"]
+    interval: 30s
+    timeout: 10s
+    retries: 30
+  ulimits:
+    memlock:
+      soft: -1
+      hard: -1
+  networks:
+   - esnet
+  
+ initializer:
+  build: initializer
+  depends_on: 
+    - elasticsearch1
+    - elasticsearch2
+    - elasticsearch3
+  container_name: initializer
+  environment:
+    - "ES_HOST_SEED=http://elasticsearch1:9200,http://elasticsearch2:9200,http://elasticsearch3:9200"
+  networks:
+    - esnet
+  command: >
+    bash -c "
+      sleep 30 && 
+      cd /usr/src/app &&
+      python -u init_script.py
+    "
+
+ py_app:
+  build: py
+  depends_on: 
+    - elasticsearch1
+    - elasticsearch2
+    - elasticsearch3
+  container_name: py_app
+  ports:
+    - "4444:4444"
+  environment:
+    - "ES_HOST_SEED=http://elasticsearch1:9200,http://elasticsearch2:9200,http://elasticsearch3:9200"
+  networks:
+   - esnet
+  restart: always
+
+ go_app:
+  build: go
+  depends_on: 
+    - elasticsearch1
+    - elasticsearch2
+    - elasticsearch3
+  container_name: go_app
+  ports:
+    - "5555:5555"
+  networks:
+    - esnet
+  restart: always
+
+ node-exporter:
+  image: prom/node-exporter:latest
+  container_name: node-exporter
+  restart: unless-stopped
+  volumes:
+    - /proc:/host/proc:ro
+    - /sys:/host/sys:ro
+    - /:/rootfs:ro
+  command:
+    - '--path.procfs=/host/proc'
+    - '--path.rootfs=/rootfs'
+    - '--path.sysfs=/host/sys'
+    - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+  ports:
+    - "9100:9100"
+  networks:
+    - monitoring
+
+ prometheus:
+  image: prom/prometheus:latest
+  container_name: prometheus
+  user: '0'
+  restart: unless-stopped
+  volumes: 
+    - ./promgrafnode/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml 
+    - ./promgrafnode/prometheus:/prometheus 
+  command:
+    - '--config.file=/etc/prometheus/prometheus.yml'
+    - '--storage.tsdb.path=/prometheus'
+    - '--web.console.libraries=/etc/prometheus/console_libraries'
+    - '--web.console.templates=/etc/prometheus/consoles'
+    - '--web.enable-lifecycle'
+  ports:
+    - "9090:9090"
+  networks:
+    - monitoring
+
+ grafana: 
+  image: grafana/grafana:latest 
+  container_name: grafana 
+  user: '0'
+  ports: 
+    - 3000:3000 
+  restart: unless-stopped 
+  volumes: 
+    - ./promgrafnode/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources 
+    - ./promgrafnode/grafana:/var/lib/grafana 
+  networks: 
+    - monitoring 
+
+ cadvisor: 
+  image: gcr.io/cadvisor/cadvisor:latest 
+  container_name: cadvisor 
+  ports: 
+    - 8081:8080 
+  networks: 
+    - monitoring 
+  volumes: 
+    - /:/rootfs:ro 
+    - /var/run:/var/run:rw 
+    - /sys:/sys:ro 
+    - /var/lib/docker/:/var/lib/docker:ro 
+  depends_on: 
+    - redis 
+
+ redis: 
+  image: redis:latest 
+  container_name: redis 
+  ports: 
+   - 6379:6379 
+  networks: 
+    - monitoring
+
+ haproxy:
+  image: haproxy
+  ports:
+    - "80:80"
+  volumes:
+    - ./haproxy:/usr/local/etc/haproxy
+  networks:
+    - monitoring
+    - esnet
+  restart: unless-stopped
+  command: >
+    haproxy -f /usr/local/etc/haproxy/haproxy.cfg -db
